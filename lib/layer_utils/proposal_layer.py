@@ -33,10 +33,14 @@ def proposal_layer(rpn_cls_prob, rpn_bbox_pred, im_info, cfg_key, _feat_stride, 
     # (14*14*9, 4)
     rpn_bbox_pred = rpn_bbox_pred.reshape((-1, 4))
 
-    # (14*14, 9*1)
+    # (14*14, 9*1)  1位分值
     scores = scores.reshape((-1, 1))
+    # (14*14*9, 1)  1位分值
 
+    # shape (14*14*9, 4)  bbox坐标
     proposals = bbox_transform_inv(anchors, rpn_bbox_pred)
+
+    # 修理越界box
     proposals = clip_boxes(proposals, im_info[:2])
 
     # Pick the top region proposals
@@ -44,12 +48,14 @@ def proposal_layer(rpn_cls_prob, rpn_bbox_pred, im_info, cfg_key, _feat_stride, 
     order = scores.ravel().argsort()[::-1]
     if pre_nms_topN > 0:
         order = order[:pre_nms_topN]
-    #
-    proposals = proposals[order, :]
+
     # 保留前n个得分最高的
+    proposals = proposals[order, :]
+    # score也相应保留
     scores = scores[order]
 
     # Non-maximal suppression
+    # np.hstack((proposals, scores) shape (1764, 5)
     keep = nms(np.hstack((proposals, scores)), nms_thresh)
 
     # Pick th top region proposals after NMS
@@ -60,6 +66,8 @@ def proposal_layer(rpn_cls_prob, rpn_bbox_pred, im_info, cfg_key, _feat_stride, 
 
     # Only support single image as input
     batch_inds = np.zeros((proposals.shape[0], 1), dtype=np.float32)
+
+    # shape (1764 sele, 5) 5: 1位batch index, 4位坐标
     blob = np.hstack((batch_inds, proposals.astype(np.float32, copy=False)))
 
     return blob, scores

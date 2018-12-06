@@ -138,6 +138,7 @@ class Network(object):
                                               [rpn_cls_prob, rpn_bbox_pred, self._im_info, self._mode,
                                                self._feat_stride, self._anchors, self._num_anchors],
                                               [tf.float32, tf.float32], name="proposal")
+                # rois shape (1764 sele, 6), rpn_scores shape (1764 sele, 1)
 
             rois.set_shape([None, 5])
             rpn_scores.set_shape([None, 1])
@@ -198,6 +199,13 @@ class Network(object):
         return rpn_labels
 
     def _proposal_target_layer(self, rois, roi_scores, name):
+        """
+
+        :param rois: (1764 sele, 5)
+        :param roi_scores: shape (1764 sele, 1)
+        :param name:
+        :return:
+        """
         with tf.variable_scope(name) as scope:
             rois, roi_scores, labels, bbox_targets, bbox_inside_weights, bbox_outside_weights = tf.py_func(
                 proposal_target_layer,
@@ -245,6 +253,8 @@ class Network(object):
                                                     [tf.float32, tf.int32], name="generate_anchors")
             anchors.set_shape([None, 4])
             anchor_length.set_shape([])
+
+            # [xleft, ytop, xright, ybottom]
             self._anchors = anchors
             self._anchor_length = anchor_length
 
@@ -374,6 +384,7 @@ class Network(object):
         # shape (1, 14, 14, 9*4)
 
         if is_training:
+            # shape (1764 sele, 5), shape (1764 sele, 1)
             rois, roi_scores = self._proposal_layer(rpn_cls_prob, rpn_bbox_pred, "rois")
             rpn_labels = self._anchor_target_layer(rpn_cls_score, "anchor")
             # Try to have a deterministic order for the computing graph, for reproducibility
