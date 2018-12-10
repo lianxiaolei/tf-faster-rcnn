@@ -17,10 +17,14 @@ from model.bbox_transform import bbox_transform
 
 
 def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anchors, num_anchors):
-    """Same as the anchor target layer in original Fast/er RCNN """
-    A = num_anchors
-    total_anchors = all_anchors.shape[0]
-    K = total_anchors / num_anchors
+    """
+    Same as the anchor target layer in original Fast/er RCNN
+    :param gt_boxes [None, 5]
+    """
+
+    A = num_anchors  # 9
+    total_anchors = all_anchors.shape[0]  # 1764
+    K = total_anchors / num_anchors  # 1764/9
 
     # allow boxes to sit over the edge by a small amount
     _allowed_border = 0
@@ -29,6 +33,7 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     height, width = rpn_cls_score.shape[1:3]
 
     # only keep anchors inside the image
+    # inds_inside 是没有越界的框在ndarray中的索引号
     inds_inside = np.where(
         (all_anchors[:, 0] >= -_allowed_border) &
         (all_anchors[:, 1] >= -_allowed_border) &
@@ -37,6 +42,7 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     )[0]
 
     # keep only inside anchors
+    # anchors变为只完全在图像内的anchors
     anchors = all_anchors[inds_inside, :]
 
     # label: 1 is positive, 0 is negative, -1 is dont care
@@ -46,33 +52,51 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     # overlaps between the anchors and the gt boxes
     # overlaps (ex, gt)
     overlaps = bbox_overlaps(
+        # ascontiguousarray 返回一个地址连续的数组
         np.ascontiguousarray(anchors, dtype=np.float),
         np.ascontiguousarray(gt_boxes, dtype=np.float))
+    # overlaps[N, K] N个anchors与K个真实box的交并比
+
+    # 求与每个anchors交并比最大的真实box的index k
     argmax_overlaps = overlaps.argmax(axis=1)
+    # 用坐标求出来具体的值
     max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
-    gt_argmax_overlaps = overlaps.argmax(axis=0)
-    gt_max_overlaps = overlaps[gt_argmax_overlaps,
-                               np.arange(overlaps.shape[1])]
+
+    # 求与每个真实box交并比最大的anchor的index n
+    gt_argmax_overlaps = overlaps.argmax(axis=0)  # shape(1, K)
+    # 用坐标求出来具体的值 shape(1, K), 取出来抓到的每列的最大值
+    gt_max_overlaps = overlaps[gt_argmax_overlaps, np.arange(overlaps.shape[1])]
+
+    # 返回被选中的元素的x和y两个list
     gt_argmax_overlaps = np.where(overlaps == gt_max_overlaps)[0]
 
     if not cfg.TRAIN.RPN_CLOBBER_POSITIVES:
         # assign bg labels first so that positive labels can clobber them
         # first set the negatives
+        # 将交并比小于阈值的设为背景，即label为0
         labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
 
     # fg label: for each gt, anchor with highest overlap
+    # 将与每个gt_box交并比最大的 anchor的label设为1
     labels[gt_argmax_overlaps] = 1
 
     # fg label: above threshold IOU
+    # 将与每个anchors交并比最大的真实box所在的anchors index的label设为1
     labels[max_overlaps >= cfg.TRAIN.RPN_POSITIVE_OVERLAP] = 1
 
     if cfg.TRAIN.RPN_CLOBBER_POSITIVES:
         # assign bg labels last so that negative labels can clobber positives
-        labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
+        labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0  # ???
 
     # subsample positive labels if we have too many
+    # 对正例重采样
     num_fg = int(cfg.TRAIN.RPN_FG_FRACTION * cfg.TRAIN.RPN_BATCHSIZE)
+
+    # np.where tuple类型，第一维的index列表
+    # fg_inds label=1的第一维坐标
     fg_inds = np.where(labels == 1)[0]
+
+    # 如果检测出的正例个数大于阈值
     if len(fg_inds) > num_fg:
         disable_inds = npr.choice(
             fg_inds, size=(len(fg_inds) - num_fg), replace=False)

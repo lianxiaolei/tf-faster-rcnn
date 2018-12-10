@@ -138,11 +138,12 @@ class Network(object):
                                               [rpn_cls_prob, rpn_bbox_pred, self._im_info, self._mode,
                                                self._feat_stride, self._anchors, self._num_anchors],
                                               [tf.float32, tf.float32], name="proposal")
-                # rois shape (1764 sele, 6), rpn_scores shape (1764 sele, 1)
+                # rois shape (1764 sele, 5) 第一位是id,好像全是0；rpn_scores shape (1764 sele, 1)
 
             rois.set_shape([None, 5])
             rpn_scores.set_shape([None, 1])
 
+        # shape (1764 sele, 5), shape (1764 sele, 1)
         return rois, rpn_scores
 
     # Only use it if you have roi_pooling op written in tf.image
@@ -176,6 +177,12 @@ class Network(object):
         return tf.nn.dropout(bottom, ratio, name=name)
 
     def _anchor_target_layer(self, rpn_cls_score, name):
+        """
+
+        :param rpn_cls_score: shape (1, H/16, W/16, 9 * 2)
+        :param name: anchor
+        :return:
+        """
         with tf.variable_scope(name) as scope:
             rpn_labels, rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights = tf.py_func(
                 anchor_target_layer,
@@ -254,7 +261,7 @@ class Network(object):
             anchors.set_shape([None, 4])
             anchor_length.set_shape([])
 
-            # [xleft, ytop, xright, ybottom]
+            # [xleft, ytop, xright, ybottom] shape(1764, 4)
             self._anchors = anchors
             self._anchor_length = anchor_length
 
@@ -273,6 +280,7 @@ class Network(object):
             # build the anchors for the image
             self._anchor_component()
             # self._anchors shape (1764, 4), self.anchor_length = 1764
+
             # region proposal network
             rois = self._region_proposal(net_conv, is_training, initializer)
             # region of interest pooling
@@ -384,8 +392,10 @@ class Network(object):
         # shape (1, 14, 14, 9*4)
 
         if is_training:
-            # shape (1764 sele, 5), shape (1764 sele, 1)
+            # shape (1764 sele, 5) 第一位是全0的ID, shape (1764 sele, 1)
             rois, roi_scores = self._proposal_layer(rpn_cls_prob, rpn_bbox_pred, "rois")
+
+            #
             rpn_labels = self._anchor_target_layer(rpn_cls_score, "anchor")
             # Try to have a deterministic order for the computing graph, for reproducibility
             with tf.control_dependencies([rpn_labels]):
@@ -436,6 +446,7 @@ class Network(object):
                             anchor_scales=(8, 16, 32), anchor_ratios=(0.5, 1, 2)):
         self._image = tf.placeholder(tf.float32, shape=[1, None, None, 3])
         self._im_info = tf.placeholder(tf.float32, shape=[3])
+        # 真实的box
         self._gt_boxes = tf.placeholder(tf.float32, shape=[None, 5])
         self._tag = tag
 
