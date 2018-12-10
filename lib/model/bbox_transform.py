@@ -13,6 +13,12 @@ import tensorflow as tf
 
 
 def bbox_transform(ex_rois, gt_rois):
+    """
+    calculate the bounding box regression value with paper's formula
+    :param ex_rois:
+    :param gt_rois:
+    :return:
+    """
     ex_widths = ex_rois[:, 2] - ex_rois[:, 0] + 1.0
     ex_heights = ex_rois[:, 3] - ex_rois[:, 1] + 1.0
     ex_ctr_x = ex_rois[:, 0] + 0.5 * ex_widths
@@ -28,6 +34,7 @@ def bbox_transform(ex_rois, gt_rois):
     targets_dw = np.log(gt_widths / ex_widths)
     targets_dh = np.log(gt_heights / ex_heights)
 
+    # shape(num anchors in image, 4)
     targets = np.vstack(
         (targets_dx, targets_dy, targets_dw, targets_dh)).transpose()
     return targets

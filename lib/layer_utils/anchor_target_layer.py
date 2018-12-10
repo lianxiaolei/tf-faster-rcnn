@@ -29,7 +29,7 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
     # allow boxes to sit over the edge by a small amount
     _allowed_border = 0
 
-    # map of shape (..., H, W)
+    # map of shape (..., H/16, W/16)
     height, width = rpn_cls_score.shape[1:3]
 
     # only keep anchors inside the image
@@ -98,11 +98,13 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
 
     # 如果检测出的正例个数大于阈值
     if len(fg_inds) > num_fg:
+        # 随机选出过多的index将其label设为-1
         disable_inds = npr.choice(
             fg_inds, size=(len(fg_inds) - num_fg), replace=False)
         labels[disable_inds] = -1
 
     # subsample negative labels if we have too many
+    # 对负例重采样 labels现在全为-1，长度是所有的图像内anchor的个数
     num_bg = cfg.TRAIN.RPN_BATCHSIZE - np.sum(labels == 1)
     bg_inds = np.where(labels == 0)[0]
     if len(bg_inds) > num_bg:
@@ -110,16 +112,23 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
             bg_inds, size=(len(bg_inds) - num_bg), replace=False)
         labels[disable_inds] = -1
 
-    bbox_targets = np.zeros((len(inds_inside), 4), dtype=np.float32)
+    # bbox_targets = np.zeros((len(inds_inside), 4), dtype=np.float32)
+
+    # 统计所有在图像内的anchor的BBR value
+    # shape(num anchors in image, 4)
     bbox_targets = _compute_targets(anchors, gt_boxes[argmax_overlaps, :])
 
+    # initialize inside weight
     bbox_inside_weights = np.zeros((len(inds_inside), 4), dtype=np.float32)
     # only the positive ones have regression targets
-    bbox_inside_weights[labels == 1, :] = np.array(cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS)
+    bbox_inside_weights[labels == 1, :] = np.array(cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS)  # ???什么狗
 
+    # initialize outside weight same as initialization of inside weight
     bbox_outside_weights = np.zeros((len(inds_inside), 4), dtype=np.float32)
-    if cfg.TRAIN.RPN_POSITIVE_WEIGHT < 0:
+
+    if cfg.TRAIN.RPN_POSITIVE_WEIGHT < 0:  # ???什么辣鸡
         # uniform weighting of examples (given non-uniform sampling)
+        # 前背景数
         num_examples = np.sum(labels >= 0)
         positive_weights = np.ones((1, 4)) * 1.0 / num_examples
         negative_weights = np.ones((1, 4)) * 1.0 / num_examples
@@ -130,18 +139,25 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
                             np.sum(labels == 1))
         negative_weights = ((1.0 - cfg.TRAIN.RPN_POSITIVE_WEIGHT) /
                             np.sum(labels == 0))
+
     bbox_outside_weights[labels == 1, :] = positive_weights
     bbox_outside_weights[labels == 0, :] = negative_weights
 
     # map up to original set of anchors
+    # total anchor 1764
+    # labels num anchor in image
+    # shape(1764, num_inside)
     labels = _unmap(labels, total_anchors, inds_inside, fill=-1)
     bbox_targets = _unmap(bbox_targets, total_anchors, inds_inside, fill=0)
     bbox_inside_weights = _unmap(bbox_inside_weights, total_anchors, inds_inside, fill=0)
     bbox_outside_weights = _unmap(bbox_outside_weights, total_anchors, inds_inside, fill=0)
 
     # labels
-    labels = labels.reshape((1, height, width, A)).transpose(0, 3, 1, 2)
-    labels = labels.reshape((1, 1, A * height, width))
+    # height, width, A = H/16, W/16, 9
+    labels = labels.reshape((1, height, width, A)).transpose(0, 3, 1, 2)  # transpose to 1, 9, H/16, W/16
+    labels = labels.reshape((1, 1, A * height, width))  # reshape to 1, 1, 9 * H/16, W/16
+
+    # shape(1, 1, 9 * H/16, W/16)
     rpn_labels = labels
 
     # bbox_targets
@@ -160,17 +176,26 @@ def anchor_target_layer(rpn_cls_score, gt_boxes, im_info, _feat_stride, all_anch
         .reshape((1, height, width, A * 4))
 
     rpn_bbox_outside_weights = bbox_outside_weights
+    # shape(1,1,9*H/16,W/16), shape(1,H/16,W/16,9*4), shape(1, height, width, A * 4), shape(1, height, width, A * 4)
     return rpn_labels, rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights
 
 
 def _unmap(data, count, inds, fill=0):
-    """ Unmap a subset of item (data) back to the original set of items (of
-    size count) """
+    """
+     Unmap a subset of item (data) back to the original set of items (of size count)
+    :param data: labels shape(1, inside inds)
+    :param count: total anchor 1764
+    :param inds: inside inds
+    :param fill: -1
+    :return:
+    """
+    # 如果是一维
     if len(data.shape) == 1:
         ret = np.empty((count,), dtype=np.float32)
         ret.fill(fill)
         ret[inds] = data
     else:
+        # shape(1764, num_inside), 两tuple相加为拼接成一个tuple
         ret = np.empty((count,) + data.shape[1:], dtype=np.float32)
         ret.fill(fill)
         ret[inds, :] = data
@@ -178,7 +203,12 @@ def _unmap(data, count, inds, fill=0):
 
 
 def _compute_targets(ex_rois, gt_rois):
-    """Compute bounding-box regression targets for an image."""
+    """
+    Compute bounding-box regression targets for an image.
+    :param ex_rois: 所有在图像内的anchor
+    :param gt_rois: 所有在图像内的gt_box
+    :return: shape(num anchors in image, 4)
+    """
 
     assert ex_rois.shape[0] == gt_rois.shape[0]
     assert ex_rois.shape[1] == 4

@@ -155,8 +155,17 @@ class Network(object):
                                         spatial_scale=1. / 16.)[0]
 
     def _crop_pool_layer(self, bottom, rois, name):
+        """
+
+        :param bottom: net_conv
+        :param rois: shape (1764 sele, 5)
+        :param name:
+        :return:
+        """
         with tf.variable_scope(name) as scope:
+            # 变成一维数组
             batch_ids = tf.squeeze(tf.slice(rois, [0, 0], [-1, 1], name="batch_id"), [1])
+
             # Get the normalized coordinates of bounding boxes
             bottom_shape = tf.shape(bottom)
             height = (tf.to_float(bottom_shape[1]) - 1.) * np.float32(self._feat_stride[0])
@@ -165,12 +174,16 @@ class Network(object):
             y1 = tf.slice(rois, [0, 2], [-1, 1], name="y1") / height
             x2 = tf.slice(rois, [0, 3], [-1, 1], name="x2") / width
             y2 = tf.slice(rois, [0, 4], [-1, 1], name="y2") / height
+
             # Won't be back-propagated to rois anyway, but to save time
-            bboxes = tf.stop_gradient(tf.concat([y1, x1, y2, x2], axis=1))
+            bboxes = tf.stop_gradient(tf.concat([y1, x1, y2, x2], axis=1))  # return a tensor
             pre_pool_size = cfg.POOLING_SIZE * 2
+
+            # resize to threshold,threshold （这batch_id依然全都是0啊傻吊）
             crops = tf.image.crop_and_resize(bottom, bboxes, tf.to_int32(batch_ids), [pre_pool_size, pre_pool_size],
                                              name="crops")
 
+        # 按bboxes截取出图像并resize to(pre_pool_size, pre_pool_size)
         return slim.max_pool2d(crops, [2, 2], padding='SAME')
 
     def _dropout_layer(self, bottom, name, ratio=0.5):
@@ -184,6 +197,7 @@ class Network(object):
         :return:
         """
         with tf.variable_scope(name) as scope:
+            # shape(1,1,9*H/16,W/16), shape(1,H/16,W/16,9*4), shape(1,height,width,9*4), shape(1,height,width,9*4)
             rpn_labels, rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights = tf.py_func(
                 anchor_target_layer,
                 [rpn_cls_score, self._gt_boxes, self._im_info, self._feat_stride, self._anchors, self._num_anchors],
@@ -203,6 +217,7 @@ class Network(object):
 
             self._score_summaries.update(self._anchor_targets)
 
+        # shape(1, 1, 9 * H / 16, W / 16)
         return rpn_labels
 
     def _proposal_target_layer(self, rois, roi_scores, name):
@@ -282,9 +297,12 @@ class Network(object):
             # self._anchors shape (1764, 4), self.anchor_length = 1764
 
             # region proposal network
+            # shape (1764 sele, 5) 有一位batch_id全0
             rois = self._region_proposal(net_conv, is_training, initializer)
+
             # region of interest pooling
             if cfg.POOLING_MODE == 'crop':
+                # 按bboxes截取出图像并resize to(pre_pool_size, pre_pool_size)
                 pool5 = self._crop_pool_layer(net_conv, rois, "pool5")
             else:
                 raise NotImplementedError
@@ -292,11 +310,14 @@ class Network(object):
         fc7 = self._head_to_tail(pool5, is_training)
         with tf.variable_scope(self._scope, self._scope):
             # region classification
+            # 加一波乘法
+            # units num_classes, num_classes*4
             cls_prob, bbox_pred = self._region_classification(fc7, is_training,
                                                               initializer, initializer_bbox)
 
-        self._score_summaries.update(self._predictions)
+        self._score_summaries.update(self._predictions)  # _predictions 各种操蛋结果
 
+        # shape (1764 sele, 5) 有一位batch_id全0 units num_classes, num_classes*4
         return rois, cls_prob, bbox_pred
 
     def _smooth_l1_loss(self, bbox_pred, bbox_targets, bbox_inside_weights, bbox_outside_weights, sigma=1.0, dim=[1]):
@@ -352,6 +373,7 @@ class Network(object):
             self._losses['rpn_loss_box'] = rpn_loss_box
 
             loss = cross_entropy + loss_box + rpn_cross_entropy + rpn_loss_box
+
             regularization_loss = tf.add_n(tf.losses.get_regularization_losses(), 'regu')
             self._losses['total_loss'] = loss + regularization_loss
 
@@ -395,15 +417,18 @@ class Network(object):
             # shape (1764 sele, 5) 第一位是全0的ID, shape (1764 sele, 1)
             rois, roi_scores = self._proposal_layer(rpn_cls_prob, rpn_bbox_pred, "rois")
 
-            #
+            # shape(1,1,9*H/16,W/16)
             rpn_labels = self._anchor_target_layer(rpn_cls_score, "anchor")
+
             # Try to have a deterministic order for the computing graph, for reproducibility
+            # 添加一个依赖
             with tf.control_dependencies([rpn_labels]):
                 rois, _ = self._proposal_target_layer(rois, roi_scores, "rpn_rois")
         else:
-            if cfg.TEST.MODE == 'nms':
+            if cfg.TEST.MODE == 'nms':  # 使用nms筛选topN
+                # shape (1764 sele, 5), shape (1764 sele, 1)
                 rois, _ = self._proposal_layer(rpn_cls_prob, rpn_bbox_pred, "rois")
-            elif cfg.TEST.MODE == 'top':
+            elif cfg.TEST.MODE == 'top':  # 使用random筛选topN
                 rois, _ = self._proposal_top_layer(rpn_cls_prob, rpn_bbox_pred, "rois")
             else:
                 raise NotImplementedError
@@ -415,6 +440,7 @@ class Network(object):
         self._predictions["rpn_bbox_pred"] = rpn_bbox_pred  # (1, 14, 14, 9*4)
         self._predictions["rois"] = rois
 
+        # shape (1764 sele, 5)
         return rois
 
     def _region_classification(self, fc7, is_training, initializer, initializer_bbox):
@@ -478,6 +504,8 @@ class Network(object):
                        weights_regularizer=weights_regularizer,
                        biases_regularizer=biases_regularizer,
                        biases_initializer=tf.constant_initializer(0.0)):
+
+            # shape (1764 sele, 5) 有一位batch_id全0 units num_classes, num_classes*4
             rois, cls_prob, bbox_pred = self._build_network(training)
 
         layers_to_output = {'rois': rois}

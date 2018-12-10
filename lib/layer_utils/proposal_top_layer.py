@@ -19,6 +19,7 @@ def proposal_top_layer(rpn_cls_prob, rpn_bbox_pred, im_info, _feat_stride, ancho
     """A layer that just selects the top region proposals
        without using non-maximal suppression,
        For details please see the technical report
+       随机选择topN
     """
     rpn_top_n = cfg.TEST.RPN_TOP_N
 
