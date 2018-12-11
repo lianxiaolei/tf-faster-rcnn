@@ -60,3 +60,9 @@ def bbox_overlaps(
                     overlaps[n, k] = iw * ih / ua
     return overlaps
 
+
+if __name__ == '__main__':
+    a = np.random.randn(3, 4)
+    b = np.random.randn(3, 4)
+    c = bbox_overlaps(a, b)
+    print(c)
